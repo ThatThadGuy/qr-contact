@@ -1,13 +1,12 @@
-name: Deploy static site to GitHub Pages
+name: Deploy static site to GitHub Pages (git push)
 
 on:
   push:
     branches: [ main ]
 
 permissions:
-  pages: write
-  id-token: write
   contents: read
+  pages: write
 
 jobs:
   deploy:
@@ -16,13 +15,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
+      - name: Prepare output directory
+        run: |
+          # Copy site files into a clean output directory. Exclude .git to avoid leaking repo metadata.
+          mkdir -p out
+          shopt -s dotglob || true
+          for f in * .*; do
+            # skip current dir indicators and .git
+            if [ "$f" = "." ] || [ "$f" = ".." ] || [ "$f" = ".git" ]; then
+              continue
+            fi
+            cp -R "$f" out/ || true
+          done
+          rm -rf out/.git || true
+          # ensure Pages doesn't run Jekyll
+          touch out/.nojekyll
 
-      - name: Upload to GitHub Pages
-        uses: actions/upload-pages-artifact@v1
-        with:
-          path: ./
+      - name: Deploy to gh-pages branch
+        env:
+          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          cd out
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Deploy to gh-pages: ${GITHUB_SHA}"
+          git branch -M gh-pages
+          # push using the token
+          git remote add origin https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git
+          git push --force origin gh-pages
 
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v1
+      - name: Configure GitHub Pages to use gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Tell GitHub Pages to use the gh-pages branch as the site source.
+          curl -s -X PUT \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pages \
+            -d '{"source":{"branch":"gh-pages","path":"/"}}' || true
